@@ -164,4 +164,5 @@ cython_debug/
 exp
 experiments_out
 data
-output
+outputs
+wandb

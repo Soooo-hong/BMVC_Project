@@ -5,6 +5,7 @@ import torch
 import hydra
 import torch.optim as optim
 from tqdm import tqdm
+import wandb 
 
 from ema_pytorch import EMA
 from omegaconf import DictConfig
@@ -18,6 +19,7 @@ from evaluation.evaluator import Evaluator
 from datasets.util import create_datasets
 from trainer import Trainer
 
+wandb.init(project="BMVC_Project")
 
 def run_epoch(fabric,
               trainer,
@@ -39,7 +41,7 @@ def run_epoch(fabric,
         # instruct the model which novel frames to render
         inputs["target_frame_ids"] = cfg.model.gauss_novel_frames
         losses, outputs = trainer(inputs)
-
+        wandb.log({"loss" : losses})
         optimiser.zero_grad(set_to_none=True)
         fabric.backward(losses["loss/total"])
         optimiser.step()
@@ -82,6 +84,7 @@ def run_epoch(fabric,
     version_base=None
 )
 def main(cfg: DictConfig):
+    os.environ["NCCL_TIMEOUT"] = "3600" # 1시간 
     hydra_cfg = HydraConfig.get()
     # set up the output directory
     output_dir = hydra_cfg['runtime']['output_dir']
@@ -90,6 +93,13 @@ def main(cfg: DictConfig):
     # set up random set
     torch.set_float32_matmul_precision('high')
     seed_everything(cfg.run.random_seed)
+    rank = os.getenv('LOCAL_RANK', 0)  # DDP rank
+    cache_dir = f'/home/soohong/.cache/torch_{rank}'  # Use unique cache directory per process
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    
+    # Set the cache directory for torch hub
+    torch.hub.set_dir(cache_dir)
     # set up training precision
     fabric = Fabric(
         accelerator="cuda",
@@ -97,7 +107,7 @@ def main(cfg: DictConfig):
         strategy=DDPStrategy(find_unused_parameters=True),
         precision=cfg.train.mixed_precision
     )
-    fabric.launch()
+    # fabric.launch()
     fabric.barrier()
     print("Loaded datasets")
     # set up model

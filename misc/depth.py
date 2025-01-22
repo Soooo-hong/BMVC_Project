@@ -103,6 +103,10 @@ def gray2rgb(im, cmap=CMAP_DEFAULT):
         result_img = np.delete(result_img, 3, 2)
     return result_img
 
+def normalize_depth_for_corrcoef(depth) : 
+    min_val = depth.amin(dim=(2,3),keepdim=True)
+    max_val = depth.amax(dim=(2,3),keepdim=True)
+    return (depth - min_val) / (max_val - min_val+ 1e-6)
 
 def normalize_depth_for_display(depth, pc=95, crop_percent=0, normalizer=None, cmap=CMAP_DEFAULT,
                                 return_normalizer=False):

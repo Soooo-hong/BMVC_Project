@@ -1,6 +1,6 @@
 defaults:
   - depth: unidepth
-  - backbone: rope_swinvit #resnet
+  - backbone:  resnet #rope_swinvit
 
 name: unidepth
 frame_ids: [0, -1, 1]

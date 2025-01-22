@@ -6,8 +6,11 @@ import numpy as np
 from einops import rearrange
 
 from models.model import GaussianPredictor
+from models.encoder.unidepth_encoder import UniDepthExtended
 from torchmetrics.image import LearnedPerceptualImagePatchSimilarity
-from misc.depth import normalize_depth_for_display
+from torchmetrics import PearsonCorrCoef
+from torchmetrics.functional.regression import pearson_corrcoef
+from misc.depth import normalize_depth_for_display,normalize_depth_for_corrcoef
 from misc.util import sec_to_hm_str
 
 from models.encoder.layers import SSIM
@@ -92,21 +95,44 @@ class Trainer(nn.Module):
                     big_offset_reg_loss = 0.0
                 losses["loss/gauss_offset_reg"] = big_offset_reg_loss
                 total_loss += offs_lmbd * big_offset_reg_loss
+            
+            # Pearson regularization term for depth prediction and reconstruction loss
 
-            # reconstruction loss
             frame_ids = self.model.all_frame_ids(inputs)
+            depth_estimator = self.model.models.unidepth_extended.unidepth
+            depth_corrcoef = 0
+
             rec_loss = 0
             for frame_id in frame_ids:
                 # compute gaussian reconstruction loss
-                target = inputs[("color_aug", frame_id, 0)]
-                target = target[:,:,cfg.dataset.pad_border_aug:target.shape[2]-cfg.dataset.pad_border_aug,
-                                cfg.dataset.pad_border_aug:target.shape[3]-cfg.dataset.pad_border_aug,]
+                target_ = inputs[("color_aug", frame_id, 0)]
+                target = target_[:,:,cfg.dataset.pad_border_aug:target_.shape[2]-cfg.dataset.pad_border_aug,
+                                cfg.dataset.pad_border_aug:target_.shape[3]-cfg.dataset.pad_border_aug,]
                 pred = outputs[("color_gauss", frame_id, 0)]
                 rec_loss += self.compute_reconstruction_loss(pred, target, losses)
+                
+                intrinsic = inputs[('K_tgt',frame_id) if ('K_tgt',0) in inputs.keys() else None] 
+                gt_depth = depth_estimator.infer(target, intrinsics = intrinsic)["depth"] 
+                pred_depth = rearrange(outputs[("depth", 0)][:,:,cfg.dataset.pad_border_aug:target_.shape[2]-cfg.dataset.pad_border_aug,
+                                cfg.dataset.pad_border_aug:target_.shape[3]-cfg.dataset.pad_border_aug,],"(b n) ... -> b n ...", n=cfg.model.gaussians_per_pixel)[:,1,:]
+                # version 1
+                normalized_pred_depth = normalize_depth_for_corrcoef(pred_depth).squeeze(1).reshape(-1,1)
+                normalized_gt_depth = normalize_depth_for_corrcoef(gt_depth).squeeze(1).reshape(-1,1)
+                depth_corrcoef += (1 - pearson_corrcoef(normalized_pred_depth, normalized_gt_depth))
+                # version 2
+                # depth_corrcoef = min(
+                #         (1 - pearson_corrcoef( - gt_depth, pred_depth)),
+                #         (1 - pearson_corrcoef(1 / (gt_depth + 200.), pred_depth))
+                #     )
             rec_loss /= len(frame_ids)
             losses["loss/rec"] = rec_loss
             total_loss += rec_loss
-
+            
+            # depth correlation 
+            # depth_corrcoef = depth_corrcoef/len(frame_ids)
+            # losses["loss/depth_corrcoef"] = depth_corrcoef
+            # total_loss += cfg.train.depth_corrcoef_lambda * depth_corrcoef
+            
         losses["loss/total"] = total_loss
         return losses
     

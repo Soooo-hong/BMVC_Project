@@ -71,7 +71,7 @@ def evaluate(model, cfg, evaluator, dataloader, device=None, save_vis=False):
             raise e
 
         if save_vis:
-            out_dir = Path("/mnt/rcvnas2/datasets/soohong/RealEstate10K/result_images")
+            out_dir = Path("/mnt/rcvnas2/datasets/soohong/RealEstate10K/result_images") # yaml파일을 통해 변경하도록 설정 필요 
             out_dir.mkdir(exist_ok=True)
             print(f"saving images to: {out_dir.resolve()}")
             seq_name = inputs[("frame_id", 0)][0].split("+")[1]
