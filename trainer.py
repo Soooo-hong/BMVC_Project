@@ -111,10 +111,12 @@ class Trainer(nn.Module):
                 pred = outputs[("color_gauss", frame_id, 0)]
                 rec_loss += self.compute_reconstruction_loss(pred, target, losses)
                 
-                intrinsic = inputs[('K_tgt',frame_id) if ('K_tgt',0) in inputs.keys() else None] 
-                gt_depth = depth_estimator.infer(target, intrinsics = intrinsic)["depth"] 
-                pred_depth = rearrange(outputs[("depth", 0)][:,:,cfg.dataset.pad_border_aug:target_.shape[2]-cfg.dataset.pad_border_aug,
-                                cfg.dataset.pad_border_aug:target_.shape[3]-cfg.dataset.pad_border_aug,],"(b n) ... -> b n ...", n=cfg.model.gaussians_per_pixel)[:,1,:]
+                intrinsic = inputs[('K_src',frame_id) if ('K_src',0) in inputs.keys() else None] 
+                gt_depth = depth_estimator.infer(target, intrinsics = intrinsic)["depth"]/20 
+                pred_depth  = depth_estimator.infer(pred, intrinsics = intrinsic)["depth"]/20
+
+                # pred_depth = rearrange(outputs[("depth", 0)][:,:,cfg.dataset.pad_border_aug:target_.shape[2]-cfg.dataset.pad_border_aug,
+                #                 cfg.dataset.pad_border_aug:target_.shape[3]-cfg.dataset.pad_border_aug,],"(b n) ... -> b n ...", n=cfg.model.gaussians_per_pixel)[:,1,:]
                 # version 1
                 normalized_pred_depth = normalize_depth_for_corrcoef(pred_depth).squeeze(1).reshape(-1,1)
                 normalized_gt_depth = normalize_depth_for_corrcoef(gt_depth).squeeze(1).reshape(-1,1)
@@ -129,9 +131,9 @@ class Trainer(nn.Module):
             total_loss += rec_loss
             
             # depth correlation 
-            # depth_corrcoef = depth_corrcoef/len(frame_ids)
-            # losses["loss/depth_corrcoef"] = depth_corrcoef
-            # total_loss += cfg.train.depth_corrcoef_lambda * depth_corrcoef
+            depth_corrcoef = depth_corrcoef/len(frame_ids)
+            losses["loss/depth_corrcoef"] = depth_corrcoef
+            total_loss += cfg.train.depth_corrcoef_lambda * depth_corrcoef
             
         losses["loss/total"] = total_loss
         return losses

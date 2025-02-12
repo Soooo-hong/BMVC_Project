@@ -50,38 +50,55 @@ class ResnetDecoder(nn.Module):
 
         # gaussian parameters activation
         self.gaussian_decoder = GaussianDecoder(cfg)
-
+        
     def forward(self, input_features):
-        x = input_features[-1]
-        B,_,C = x[0].shape
-        H,W = x[-1][2:]
-        x = x[0].permute(0,2,1).view(B,C,H,W)
-
-        for i in range(4, -1, -1):
-            if i != 4:
+        if self.cfg.model.backbone.name == "resnet":
+            x = input_features[-1]
+            for i in range(4, -1, -1):
                 x = self.convs[("upconv", i, 0)](x)
                 x = [upsample(x, mode=self.cfg.model.backbone.upsample_mode)]
-            else : 
-                x = [x]
-                
-            if self.use_skips and i > 0:
-                before_x = input_features[i - 1]
-                B,_,C = before_x[0].shape
-                if i > 1 :   
-                    H,W = before_x[-1][2:]
-                else : 
-                    H,W = before_x[-1]
-                before_x = before_x[0].permute(0,2,1).view(B,C,H,W)
-                x += [before_x]    
-                # x += [input_features[i - 1]]
-            x = torch.cat(x, dim=1)
-            x = self.convs[("upconv", i, 1)](x)
-        
-        x = upsample(x, mode=self.cfg.model.backbone.upsample_mode)
-        x = self.out(x)
-        out = self.gaussian_decoder(x, self.split_dimensions)
+                if self.use_skips and i > 0:
+                    x += [input_features[i - 1]]
+                x = torch.cat(x, dim=1)
+                x = self.convs[("upconv", i, 1)](x)
+            
+            x = self.out(x)
+            out = self.gaussian_decoder(x, self.split_dimensions)
 
-        return out
+            return out
+        
+        # Vit_rope 용도
+        else : 
+            x = input_features[-1]
+            B,_,C = x[0].shape
+            H,W = x[-1][2:]
+            x = x[0].permute(0,2,1).view(B,C,H,W)
+
+            for i in range(4, -1, -1):
+                if i != 4:
+                    x = self.convs[("upconv", i, 0)](x)
+                    x = [upsample(x, mode=self.cfg.model.backbone.upsample_mode)]
+                else : 
+                    x = [x]
+                    
+                if self.use_skips and i > 0:
+                    before_x = input_features[i - 1]
+                    B,_,C = before_x[0].shape
+                    if i > 1 :   
+                        H,W = before_x[-1][2:]
+                    else : 
+                        H,W = before_x[-1]
+                    before_x = before_x[0].permute(0,2,1).view(B,C,H,W)
+                    x += [before_x]    
+                    # x += [input_features[i - 1]]
+                x = torch.cat(x, dim=1)
+                x = self.convs[("upconv", i, 1)](x)
+            
+            x = upsample(x, mode=self.cfg.model.backbone.upsample_mode)
+            x = self.out(x)
+            out = self.gaussian_decoder(x, self.split_dimensions)
+
+            return out
 
 
 class ResnetDepthDecoder(nn.Module):
@@ -93,7 +110,7 @@ class ResnetDepthDecoder(nn.Module):
         self.scales = cfg.model.scales
         self.use_skips = use_skips
         self.num_ch_enc = num_ch_enc
-        self.num_ch_dec = np.array([48,96,192,384,768]) #np.array([16, 32, 64, 128, 256])
+        self.num_ch_dec = np.array([16, 32, 64, 128, 256]) if self.cfg.model.backbone.name == "resnet" else np.array([48, 96, 192, 384, 768])
 
         self.num_output_channels = cfg.model.gaussians_per_pixel - 1 if "unidepth" in cfg.model.name else cfg.model.gaussians_per_pixel
 
@@ -128,40 +145,61 @@ class ResnetDepthDecoder(nn.Module):
         elif cfg.model.depth_type == "depth_inc":
             self.activate = torch.exp
 
+    
     def forward(self, input_features):
         outputs = {}
         x = input_features[-1]
-        B,_,C = x[0].shape
-        H,W = x[-1][2:]
-        x = x[0].permute(0,2,1).view(B,C,H,W)
-        
-        for i in range(4, -1, -1): 
-            if i != 4 :             
+        if self.cfg.model.backbone.name == "resnet":
+            for i in range(4, -1, -1):
                 x = self.convs[("upconv", i, 0)](x)
                 x = [upsample(x, mode=self.cfg.model.backbone.upsample_mode)]
-            else : 
-                x = [x]
+                if self.use_skips and i > 0:
+                    x += [input_features[i - 1]]
+                x = torch.cat(x, dim=1)
+                x = self.convs[("upconv", i, 1)](x)
+                if i in self.scales:         
+                    output = self.convs[("outconv", i)](x)
+                    if self.cfg.model.depth_type == "depth_inc":
+                        output = torch.clamp(output, min=-10.0, max=6.0)
+                    output = rearrange(self.activate(output), "b (n c) ... -> (b n) c ...", n=self.num_output_channels)
+                    if self.cfg.model.depth_type in ["disp", "disp_inc"]:
+                        output = disp_to_depth(output, self.cfg.model.min_depth, self.cfg.model.max_depth)
+                    outputs[("depth", i)] = output
+            return outputs
+    
+         # Vit_rope 용도 
+        else : 
+            B,_,C = x[0].shape
+            H,W = x[-1][2:]
+            x = x[0].permute(0,2,1).view(B,C,H,W)
             
-            if self.use_skips and i > 0:
-                before_x = input_features[i - 1]
-                B,_,C = before_x[0].shape
-                if i > 1 :   
-                    H,W = before_x[-1][2:]
+            for i in range(4, -1, -1): 
+                if i != 4 :             
+                    x = self.convs[("upconv", i, 0)](x)
+                    x = [upsample(x, mode=self.cfg.model.backbone.upsample_mode)]
                 else : 
-                    H,W = before_x[-1]
-                before_x = before_x[0].permute(0,2,1).view(B,C,H,W)
-                x += [before_x]
-                # x += [input_features[i - 1]]
-     
-            x = torch.cat(x, dim=1)
-            x = self.convs[("upconv", i, 1)](x)
-            if i in self.scales:         
-                output = self.convs[("outconv", i)](x)
-                output = upsample(output, mode=self.cfg.model.backbone.upsample_mode)
-                if self.cfg.model.depth_type == "depth_inc":
-                    output = torch.clamp(output, min=-10.0, max=6.0)
-                output = rearrange(self.activate(output), "b (n c) ... -> (b n) c ...", n=self.num_output_channels)
-                if self.cfg.model.depth_type in ["disp", "disp_inc"]:
-                    output = disp_to_depth(output, self.cfg.model.min_depth, self.cfg.model.max_depth)
-                outputs[("depth", i)] = output
-        return outputs
+                    x = [x]
+                
+                if self.use_skips and i > 0:
+                    before_x = input_features[i - 1]
+                    B,_,C = before_x[0].shape
+                    if i > 1 :   
+                        H,W = before_x[-1][2:]
+                    else : 
+                        H,W = before_x[-1]
+                    before_x = before_x[0].permute(0,2,1).view(B,C,H,W)
+                    x += [before_x]
+                    # x += [input_features[i - 1]]
+        
+                x = torch.cat(x, dim=1)
+                x = self.convs[("upconv", i, 1)](x)
+                if i in self.scales:         
+                    output = self.convs[("outconv", i)](x)
+                    output = upsample(output, mode=self.cfg.model.backbone.upsample_mode)
+                    if self.cfg.model.depth_type == "depth_inc":
+                        output = torch.clamp(output, min=-10.0, max=6.0)
+                    output = rearrange(self.activate(output), "b (n c) ... -> (b n) c ...", n=self.num_output_channels)
+                    if self.cfg.model.depth_type in ["disp", "disp_inc"]:
+                        output = disp_to_depth(output, self.cfg.model.min_depth, self.cfg.model.max_depth)
+                    outputs[("depth", i)] = output
+            return outputs

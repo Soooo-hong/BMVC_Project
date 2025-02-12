@@ -6,9 +6,11 @@ import numpy as np
 
 from tqdm import tqdm
 from pathlib import Path
+from einops import rearrange
 from omegaconf import DictConfig
 from hydra.core.hydra_config import HydraConfig
 from matplotlib import pyplot as plt
+import matplotlib.cm as cm
 import torchvision.transforms.functional as TF
 
 from models.model import GaussianPredictor, to_device
@@ -56,6 +58,8 @@ def evaluate(model, cfg, evaluator, dataloader, device=None, save_vis=False):
                                     "name": fid}
 
     dataloader_iter = iter(dataloader)
+    
+
     for k in tqdm([i for i in range(len(dataloader.dataset) // cfg.data_loader.batch_size)], desc="Eval"):
 
         try:
@@ -71,7 +75,7 @@ def evaluate(model, cfg, evaluator, dataloader, device=None, save_vis=False):
             raise e
 
         if save_vis:
-            out_dir = Path("/mnt/rcvnas2/datasets/soohong/RealEstate10K/result_images") # yaml파일을 통해 변경하도록 설정 필요 
+            out_dir = Path("/mnt/rcvnas2/datasets/soohong/RealEstate10K/pixelsplat_splits_one_diff_30_result_images") # yaml파일을 통해 변경하도록 설정 필요 
             out_dir.mkdir(exist_ok=True)
             print(f"saving images to: {out_dir.resolve()}")
             seq_name = inputs[("frame_id", 0)][0].split("+")[1]
@@ -83,6 +87,10 @@ def evaluate(model, cfg, evaluator, dataloader, device=None, save_vis=False):
             out_gt_dir.mkdir(exist_ok=True)
             out_dir_ply = out_out_dir / "ply"
             out_dir_ply.mkdir(exist_ok=True)
+            out_pred_depth_dir = out_out_dir / f"pred_depth"
+            out_pred_depth_dir.mkdir(exist_ok=True)
+            out_gt_depth_dir = out_out_dir / f"gt_depth"
+            out_gt_depth_dir.mkdir(exist_ok=True)
 
         with torch.no_grad():
             if device is not None:
@@ -100,11 +108,32 @@ def evaluate(model, cfg, evaluator, dataloader, device=None, save_vis=False):
             # should work in for B>1, however be careful of reduction
             out = evaluator(pred, gt)
             if save_vis:
-                save_ply(outputs, out_dir_ply / f"{f_id}.ply", gaussians_per_pixel=model.cfg.model.gaussians_per_pixel)
+                depth_estimator = model.models.unidepth_extended.unidepth
+                ### detph 구하기 ###
+                target = inputs[("color_aug", f_id, 0)]
+                intrinsic = inputs[('K_src',f_id)] if ('K_src',f_id) in inputs.keys() else None
+                gt_depth = depth_estimator.infer(target, intrinsics = intrinsic)["depth"]/20 
+                gt_depth = gt_depth[:,:,cfg.dataset.pad_border_aug:target.shape[2]-cfg.dataset.pad_border_aug,
+                                cfg.dataset.pad_border_aug:target.shape[3]-cfg.dataset.pad_border_aug,]
+
+                pred_depth = depth_estimator.infer(pred, intrinsics = intrinsic)["depth"]/20
+                # pred_depth = pred_depth[:,:,cfg.dataset.pad_border_aug:target.shape[2]-cfg.dataset.pad_border_aug,
+                #                 cfg.dataset.pad_border_aug:target.shape[3]-cfg.dataset.pad_border_aug,]
+                
                 pred = pred[0].clip(0.0, 1.0).permute(1, 2, 0).detach().cpu().numpy()
                 gt = gt[0].clip(0.0, 1.0).permute(1, 2, 0).detach().cpu().numpy()
                 plt.imsave(str(out_pred_dir / f"{f_id:03}.png"), pred)
                 plt.imsave(str(out_gt_dir / f"{f_id:03}.png"), gt)
+                pred_depth = pred_depth[0].permute(1, 2, 0).detach().cpu().numpy()
+                pred_depth = pred_depth.squeeze()
+                # color_pred_depth = cm.get_cmap("viridis")(pred_depth)
+                # color_pred_depth = (color_pred_depth[:,:,:3] * 255).astype(np.uint8)
+                gt_depth = gt_depth[0].permute(1, 2, 0).detach().cpu().numpy()
+                gt_depth = gt_depth.squeeze()
+                # color_gt_depth = cm.get_cmap("viridis")(gt_depth)
+                # color_gt_depth = (color_gt_depth[:,:,:3] * 255).astype(np.uint8)
+                plt.imsave(str(out_pred_depth_dir / f"{f_id:03}.png"), pred_depth,cmap='gray')
+                plt.imsave(str(out_gt_depth_dir / f"{f_id:03}.png"), gt_depth,cmap='gray')
             for metric_name, v in out.items():
                 score_dict[f_id][metric_name].append(v)
 

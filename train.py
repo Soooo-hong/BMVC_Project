@@ -19,7 +19,7 @@ from evaluation.evaluator import Evaluator
 from datasets.util import create_datasets
 from trainer import Trainer
 
-wandb.init(project="BMVC_Project")
+wandb.init(project="BMVC_Project_2")
 
 def run_epoch(fabric,
               trainer,
